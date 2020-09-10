@@ -229,21 +229,9 @@ func (b *AutoscalingGroupModelBuilder) buildLaunchConfigurationTask(c *fi.ModelB
 		t.SpotPrice = spotPrice
 	}
 
-	// @step: check the subnets are ok and pull together an array for us
-	subnets, err := b.GatherSubnets(ig)
-	if err != nil {
-		return nil, err
-	}
-
-	// @step: check if we can add an public ip to this subnet
-	switch subnets[0].Type {
-	case kops.SubnetTypePublic, kops.SubnetTypeUtility:
-		t.AssociatePublicIP = fi.Bool(true)
-		if ig.Spec.AssociatePublicIP != nil {
-			t.AssociatePublicIP = ig.Spec.AssociatePublicIP
-		}
-	case kops.SubnetTypePrivate:
-		t.AssociatePublicIP = fi.Bool(false)
+	t.AssociatePublicIP = fi.Bool(true)
+	if ig.Spec.AssociatePublicIP != nil {
+		t.AssociatePublicIP = ig.Spec.AssociatePublicIP
 	}
 
 	return t, nil

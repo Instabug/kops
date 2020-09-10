@@ -47,7 +47,7 @@ type ElasticIP struct {
 	Tags map[string]string
 
 	// AssociatedNatGatewayRouteTable follows the RouteTable -> NatGateway -> ElasticIP
-	AssociatedNatGatewayRouteTable *RouteTable
+	// AssociatedNatGatewayRouteTable *RouteTable
 }
 
 var _ fi.CompareWithID = &ElasticIP{}
@@ -78,31 +78,6 @@ func (e *ElasticIP) Find(context *fi.Context) (*ElasticIP, error) {
 func (e *ElasticIP) find(cloud awsup.AWSCloud) (*ElasticIP, error) {
 	publicIP := e.PublicIP
 	allocationID := e.ID
-
-	// Find via RouteTable -> NatGateway -> ElasticIP
-	if allocationID == nil && publicIP == nil && e.AssociatedNatGatewayRouteTable != nil {
-		ngw, err := findNatGatewayFromRouteTable(cloud, e.AssociatedNatGatewayRouteTable)
-		if err != nil {
-			return nil, fmt.Errorf("error finding AssociatedNatGatewayRouteTable: %v", err)
-		}
-
-		if ngw == nil {
-			glog.V(2).Infof("AssociatedNatGatewayRouteTable not found")
-		} else {
-			if len(ngw.NatGatewayAddresses) == 0 {
-				return nil, fmt.Errorf("NatGateway %q has no addresses", *ngw.NatGatewayId)
-			}
-			if len(ngw.NatGatewayAddresses) > 1 {
-				return nil, fmt.Errorf("NatGateway %q has multiple addresses", *ngw.NatGatewayId)
-			}
-			allocationID = ngw.NatGatewayAddresses[0].AllocationId
-			if allocationID == nil {
-				return nil, fmt.Errorf("NatGateway %q has nil addresses", *ngw.NatGatewayId)
-			} else {
-				glog.V(2).Infof("Found ElasticIP AllocationID %q via NatGateway", *allocationID)
-			}
-		}
-	}
 
 	// Find via tag on subnet
 	// TODO: Deprecated, because doesn't round-trip with terraform
@@ -158,7 +133,6 @@ func (e *ElasticIP) find(cloud awsup.AWSCloud) (*ElasticIP, error) {
 			PublicIP: a.PublicIp,
 		}
 		actual.TagOnSubnet = e.TagOnSubnet
-		actual.AssociatedNatGatewayRouteTable = e.AssociatedNatGatewayRouteTable
 
 		{
 			tags, err := cloud.EC2().DescribeTags(&ec2.DescribeTagsInput{

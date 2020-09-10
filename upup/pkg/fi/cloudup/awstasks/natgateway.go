@@ -269,7 +269,7 @@ func (s *NatGateway) CheckChanges(a, e, changes *NatGateway) error {
 }
 
 func (e *NatGateway) Run(c *fi.Context) error {
-	return fi.DefaultDeltaRunMethod(e, c)
+	return nil
 }
 
 func (e *NatGateway) waitAvailable(cloud awsup.AWSCloud) error {

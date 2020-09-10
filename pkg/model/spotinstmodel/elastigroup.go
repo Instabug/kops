@@ -221,22 +221,10 @@ func (b *ElastigroupModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 
 		associatePublicIP := true
-		switch subnetType {
-		case kops.SubnetTypePublic, kops.SubnetTypeUtility:
-			associatePublicIP = true
-			if ig.Spec.AssociatePublicIP != nil {
-				associatePublicIP = *ig.Spec.AssociatePublicIP
-			}
-		case kops.SubnetTypePrivate:
-			associatePublicIP = false
-			if ig.Spec.AssociatePublicIP != nil {
-				if *ig.Spec.AssociatePublicIP {
-					glog.Warningf("Ignoring AssociatePublicIP=true for private InstanceGroup %q", ig.ObjectMeta.Name)
-				}
-			}
-		default:
-			return fmt.Errorf("spotinst: unknown subnet type %q", subnetType)
+		if ig.Spec.AssociatePublicIP != nil {
+			associatePublicIP = *ig.Spec.AssociatePublicIP
 		}
+
 		group.AssociatePublicIP = &associatePublicIP
 
 		// Subnets.

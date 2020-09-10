@@ -202,17 +202,7 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			glog.V(2).Infof("applying subnet tags")
 			tags = b.CloudTags(subnetName, sharedSubnet)
 			tags["SubnetType"] = string(subnetSpec.Type)
-
-			switch subnetSpec.Type {
-			case kops.SubnetTypePublic, kops.SubnetTypeUtility:
-				tags[aws.TagNameSubnetPublicELB] = "1"
-
-			case kops.SubnetTypePrivate:
-				tags[aws.TagNameSubnetInternalELB] = "1"
-
-			default:
-				glog.V(2).Infof("unable to properly tag subnet %q because it has unknown type %q. Load balancers may be created in incorrect subnets", subnetSpec.Name, subnetSpec.Type)
-			}
+			tags[aws.TagNameSubnetPublicELB] = "1"
 		}
 
 		subnet := &awstasks.Subnet{
@@ -231,39 +221,13 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		}
 		c.AddTask(subnet)
 
-		switch subnetSpec.Type {
-		case kops.SubnetTypePublic, kops.SubnetTypeUtility:
-			if !sharedSubnet && !isUnmanaged(subnetSpec) {
-				c.AddTask(&awstasks.RouteTableAssociation{
-					Name:       s(subnetSpec.Name + "." + b.ClusterName()),
-					Lifecycle:  b.Lifecycle,
-					RouteTable: publicRouteTable,
-					Subnet:     subnet,
-				})
-			}
-
-		case kops.SubnetTypePrivate:
-			// Private subnets get a Network Gateway, and their own route table to associate them with the network gateway
-
-			if !sharedSubnet && !isUnmanaged(subnetSpec) {
-				// Private Subnet Route Table Associations
-				//
-				// Map the Private subnet to the Private route table
-				c.AddTask(&awstasks.RouteTableAssociation{
-					Name:       s("private-" + subnetSpec.Name + "." + b.ClusterName()),
-					Lifecycle:  b.Lifecycle,
-					RouteTable: b.LinkToPrivateRouteTableInZone(subnetSpec.Zone),
-					Subnet:     subnet,
-				})
-
-				// TODO: validate even if shared?
-				if infoByZone[subnetSpec.Zone] == nil {
-					infoByZone[subnetSpec.Zone] = &zoneInfo{}
-				}
-				infoByZone[subnetSpec.Zone].PrivateSubnets = append(infoByZone[subnetSpec.Zone].PrivateSubnets, subnetSpec)
-			}
-		default:
-			return fmt.Errorf("subnet %q has unknown type %q", subnetSpec.Name, subnetSpec.Type)
+		if !sharedSubnet && !isUnmanaged(subnetSpec) {
+			c.AddTask(&awstasks.RouteTableAssociation{
+				Name:       s(subnetSpec.Name + "." + b.ClusterName()),
+				Lifecycle:  b.Lifecycle,
+				RouteTable: publicRouteTable,
+				Subnet:     subnet,
+			})
 		}
 	}
 
@@ -271,11 +235,6 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 	for zone, info := range infoByZone {
 		if len(info.PrivateSubnets) == 0 {
 			continue
-		}
-
-		utilitySubnet, err := b.LinkToUtilitySubnetInZone(zone)
-		if err != nil {
-			return err
 		}
 
 		egress := info.PrivateSubnets[0].Egress
@@ -302,25 +261,9 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			}
 		}
 
-		var ngw *awstasks.NatGateway
 		var in *awstasks.Instance
 		if egress != "" {
-			if strings.HasPrefix(egress, "nat-") {
-
-				ngw = &awstasks.NatGateway{
-					Name:                 s(zone + "." + b.ClusterName()),
-					Lifecycle:            b.Lifecycle,
-					Subnet:               utilitySubnet,
-					ID:                   s(egress),
-					AssociatedRouteTable: b.LinkToPrivateRouteTableInZone(zone),
-					// If we're here, it means this NatGateway was specified, so we are Shared
-					Shared: fi.Bool(true),
-					Tags:   b.CloudTags(zone+"."+b.ClusterName(), true),
-				}
-
-				c.AddTask(ngw)
-
-			} else if strings.HasPrefix(egress, "i-") {
+			if strings.HasPrefix(egress, "i-") {
 
 				in = &awstasks.Instance{
 					Name:      s(egress),
@@ -338,90 +281,34 @@ func (b *NetworkModelBuilder) Build(c *fi.ModelBuilderContext) error {
 				return fmt.Errorf("kops currently only supports re-use of either NAT EC2 Instances or NAT Gateways. We will support more eventually! Please see https://github.com/kubernetes/kops/issues/1530")
 			}
 
-		} else {
+			routeTableShared := allSubnetsSharedInZone[zone]
+			routeTableTags := b.CloudTags(b.NamePrivateRouteTableInZone(zone), routeTableShared)
+			routeTableTags[awsup.TagNameKopsRole] = "private-" + zone
+			rt := &awstasks.RouteTable{
+				Name:      s(b.NamePrivateRouteTableInZone(zone)),
+				VPC:       b.LinkToVPC(),
+				Lifecycle: b.Lifecycle,
 
-			// Every NGW needs a public (Elastic) IP address, every private
-			// subnet needs a NGW, lets create it. We tie it to a subnet
-			// so we can track it in AWS
-			eip := &awstasks.ElasticIP{
-				Name:                           s(zone + "." + b.ClusterName()),
-				Lifecycle:                      b.Lifecycle,
-				AssociatedNatGatewayRouteTable: b.LinkToPrivateRouteTableInZone(zone),
+				Shared: fi.Bool(routeTableShared),
+				Tags:   routeTableTags,
+			}
+			c.AddTask(rt)
+
+			var r *awstasks.Route
+			if in != nil {
+
+				r = &awstasks.Route{
+					Name:       s("private-" + zone + "-0.0.0.0/0"),
+					Lifecycle:  b.Lifecycle,
+					CIDR:       s("0.0.0.0/0"),
+					RouteTable: rt,
+					Instance:   in,
+				}
+
 			}
 
-			if publicIP != "" {
-				eip.PublicIP = s(publicIP)
-				eip.Tags = b.CloudTags(*eip.Name, true)
-			} else {
-				eip.Tags = b.CloudTags(*eip.Name, false)
-			}
-
-			c.AddTask(eip)
-			// NAT Gateway
-			//
-			// All private subnets will need a NGW, one per zone
-			//
-			// The instances in the private subnet can access the Internet by
-			// using a network address translation (NAT) gateway that resides
-			// in the public subnet.
-
-			//var ngw = &awstasks.NatGateway{}
-			ngw = &awstasks.NatGateway{
-				Name:                 s(zone + "." + b.ClusterName()),
-				Lifecycle:            b.Lifecycle,
-				Subnet:               utilitySubnet,
-				ElasticIP:            eip,
-				AssociatedRouteTable: b.LinkToPrivateRouteTableInZone(zone),
-				Tags:                 b.CloudTags(zone+"."+b.ClusterName(), false),
-			}
-			c.AddTask(ngw)
+			c.AddTask(r)
 		}
-
-		// Private Route Table
-		//
-		// The private route table that will route to the NAT Gateway
-		// We create an owned route table if we created any subnet in that zone.
-		// Otherwise we consider it shared.
-		routeTableShared := allSubnetsSharedInZone[zone]
-		routeTableTags := b.CloudTags(b.NamePrivateRouteTableInZone(zone), routeTableShared)
-		routeTableTags[awsup.TagNameKopsRole] = "private-" + zone
-		rt := &awstasks.RouteTable{
-			Name:      s(b.NamePrivateRouteTableInZone(zone)),
-			VPC:       b.LinkToVPC(),
-			Lifecycle: b.Lifecycle,
-
-			Shared: fi.Bool(routeTableShared),
-			Tags:   routeTableTags,
-		}
-		c.AddTask(rt)
-
-		// Private Routes
-		//
-		// Routes for the private route table.
-		// Will route to the NAT Gateway
-		var r *awstasks.Route
-		if in != nil {
-
-			r = &awstasks.Route{
-				Name:       s("private-" + zone + "-0.0.0.0/0"),
-				Lifecycle:  b.Lifecycle,
-				CIDR:       s("0.0.0.0/0"),
-				RouteTable: rt,
-				Instance:   in,
-			}
-
-		} else {
-
-			r = &awstasks.Route{
-				Name:       s("private-" + zone + "-0.0.0.0/0"),
-				Lifecycle:  b.Lifecycle,
-				CIDR:       s("0.0.0.0/0"),
-				RouteTable: rt,
-				NatGateway: ngw,
-			}
-		}
-		c.AddTask(r)
-
 	}
 
 	return nil
