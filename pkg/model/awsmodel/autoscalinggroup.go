@@ -164,26 +164,10 @@ func (b *AutoscalingGroupModelBuilder) Build(c *fi.ModelBuilderContext) error {
 				}
 
 				associatePublicIP := true
-				switch subnetType {
-				case kops.SubnetTypePublic, kops.SubnetTypeUtility:
-					associatePublicIP = true
-					if ig.Spec.AssociatePublicIP != nil {
-						associatePublicIP = *ig.Spec.AssociatePublicIP
-					}
-
-				case kops.SubnetTypePrivate:
-					associatePublicIP = false
-					if ig.Spec.AssociatePublicIP != nil {
-						// This isn't meaningful - private subnets can't have public ip
-						//associatePublicIP = *ig.Spec.AssociatePublicIP
-						if *ig.Spec.AssociatePublicIP {
-							glog.Warningf("Ignoring AssociatePublicIP=true for private InstanceGroup %q", ig.ObjectMeta.Name)
-						}
-					}
-
-				default:
-					return fmt.Errorf("unknown subnet type %q", subnetType)
+				if ig.Spec.AssociatePublicIP != nil {
+					associatePublicIP = *ig.Spec.AssociatePublicIP
 				}
+
 				t.AssociatePublicIP = &associatePublicIP
 			}
 			c.AddTask(t)

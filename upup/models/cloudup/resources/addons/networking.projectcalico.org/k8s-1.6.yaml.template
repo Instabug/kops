@@ -113,9 +113,7 @@ spec:
     matchLabels:
       k8s-app: calico-node
   updateStrategy:
-    rollingUpdate:
-      maxUnavailable: 1
-    type: RollingUpdate
+    type: OnDelete
   template:
     metadata:
       labels:
